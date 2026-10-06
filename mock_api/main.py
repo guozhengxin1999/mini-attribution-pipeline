@@ -16,7 +16,7 @@ def reports(date: str, cursor: int = 0):
     if calls % 11 == 0:
         raise HTTPException(500, "upstream error")
 
-    rng = random.Random(date)          # 同一天数据固定，方便验证幂等
+    rng = random.Random(date)         
     rows = []
     for c in CAMPAIGNS:
         clicks = rng.randint(500, 5000)
