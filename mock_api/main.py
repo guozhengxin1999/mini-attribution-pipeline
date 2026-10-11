@@ -1,4 +1,3 @@
-# mock_api/main.py
 import random
 from fastapi import FastAPI, HTTPException
 

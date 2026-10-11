@@ -2,9 +2,9 @@ import os
 import json
 import boto3
 from dotenv import load_dotenv
-from datetime import date
 import psycopg2
 from psycopg2.extras import execute_values
+from datetime import date, datetime, timezone
 
 
 load_dotenv()
@@ -16,7 +16,7 @@ DB_CONFIG = {
     "dbname": "attribution",
     "user": "postgres",
     "password": "pg",
-    "host": "localhost",
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
     "port": "5432"
 }
 
@@ -47,40 +47,34 @@ def upload_to_s3(partner: str, target_date: date, records: list[dict]):
     return key
 
 def load_to_postgres(partner: str, target_date: date, records: list[dict]):
-    """
-    Idempotent loading: Within a single transaction, 
-    first delete the data for the specific partner for the current day, 
-    then batch-insert the new data.
-    """
     if not records:
         print("No records to load.")
         return
 
     conn = psycopg2.connect(**DB_CONFIG)
-    
+
     insert_sql = """
-        INSERT INTO fact_daily_performance 
-        (date_id, partner_id, campaign_id, clicks, installs, spend, revenue)
+        INSERT INTO fact_daily_performance
+        (date_id, partner_id, campaign_id, clicks, installs, spend, revenue, loaded_at)
         VALUES %s
+        ON CONFLICT (date_id, partner_id, campaign_id) DO UPDATE SET
+            clicks     = EXCLUDED.clicks,
+            installs   = EXCLUDED.installs,
+            spend      = EXCLUDED.spend,
+            revenue    = EXCLUDED.revenue,
+            loaded_at  = NOW()
     """
-    
-    # Convert a list of dictionaries into a list of tuples, with the order corresponding to the columns in SQL.
+
     values = [
-        (r["date"], partner, r["campaign_id"], r["clicks"], r["installs"], r["spend"], r["revenue"])
+        (r["date"], partner, r["campaign_id"], r["clicks"], r["installs"], r["spend"], r["revenue"], datetime.now(timezone.utc))
         for r in records
     ]
 
     try:
-        with conn:  # Start a transaction; it will automatically roll back if an error occurs.
+        with conn:
             with conn.cursor() as cur:
-                # 1. Delete the old data for that partner for the current day.
-                cur.execute(
-                    "DELETE FROM fact_daily_performance WHERE date_id = %s AND partner_id = %s",
-                    (target_date, partner)
-                )
-                # 2. Bulk insert new data
                 execute_values(cur, insert_sql, values)
-        print(f"Successfully loaded {len(records)} records for {partner} on {target_date}.")
+        print(f"Upserted {len(records)} records for {partner} on {target_date}.")
     except Exception as e:
         print(f"Failed to load data: {e}")
         raise
